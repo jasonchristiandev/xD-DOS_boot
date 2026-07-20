@@ -1,3 +1,4 @@
+#include "paging.h"
 #include <efi.h>
 #include <elf.h>
 
@@ -38,10 +39,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	EFI_STATUS status;
 
 	SystemTable->ConOut->Reset(SystemTable->ConOut, FALSE);
-	Print(L"xD-DOS (Extended Drive - Disk Operating System) Bootloader (" WIDEN(COMMIT_HASH) L")\r\n"
-																							 L"> https://github.com/jasonchristiandev/xD-DOS_boot\r\n"
-																							 L"> Maintained by Jason Christian.\r\n\n"
-																							 L"> Press any key to continue...\r\n\n");
+	Print(L"xD-DOS Bootloader (" WIDEN(COMMIT_HASH) L")\r\n"
+													L"> https://github.com/jasonchristiandev/xD-DOS_boot\r\n"
+													L"> Maintained by Jason Christian.\r\n\n"
+													L"> Press any key to continue...\r\n\n");
 
 	UINTN index;
 	EFI_EVENT events[1];
@@ -121,6 +122,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	UINTN desc_size = 0;
 	UINT32 desc_ver = 0;
 	UINTN memmap_size = 0;
+
+	paging_init(SystemTable);
 
 	while (TRUE) {
 		status = SystemTable->BootServices->GetMemoryMap(&memmap_size, memmap, &memmap_key, &desc_size, &desc_ver);
