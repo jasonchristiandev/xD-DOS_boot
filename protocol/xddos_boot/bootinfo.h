@@ -1,5 +1,18 @@
 #include <stdint.h>
 
+// memmap
+typedef struct {
+	uint64_t base;
+	uint64_t length;
+	uint64_t type;
+} boot_memmap_entry_t;
+
+typedef struct {
+	uint64_t count;
+	boot_memmap_entry_t **entries;
+} boot_memmap_t;
+
+// framebuffer
 typedef struct {
 	uint64_t width;
 	uint64_t height;
@@ -33,7 +46,9 @@ typedef struct {
 	boot_framebuffer_t **entries;
 } boot_framebuffers_t;
 
+// boot_info
 typedef struct {
+	boot_memmap_t *memmap;
 	uint64_t hhdm;
 	boot_framebuffers_t *framebuffers;
 } boot_info_t;

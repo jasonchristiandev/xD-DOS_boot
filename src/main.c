@@ -51,7 +51,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	UINTN index;
 	EFI_EVENT events[1];
 	events[0] = SystemTable->ConIn->WaitForKey;
-	SystemTable->BootServices->WaitForEvent(1, events, &index);
+	// SystemTable->BootServices->WaitForEvent(1, events, &index);
 	SystemTable->ConOut->ClearScreen(SystemTable->ConOut);
 
 	EFI_FILE_HANDLE volume = get_volume(ImageHandle, SystemTable);
@@ -132,7 +132,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		}
 	}
 
-	EFI_MEMORY_DESCRIPTOR *memmap = NULL;
+	EFI_MEMORY_DESCRIPTOR *memmap_desc = NULL;
 	UINTN memmap_key = 0;
 	UINTN desc_size = 0;
 	UINT32 desc_ver = 0;
@@ -140,7 +140,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 
 	SystemTable->BootServices->GetMemoryMap(&memmap_size, NULL, &memmap_key, &desc_size, &desc_ver);
 	memmap_size += (2 * desc_size);
-	status = SystemTable->BootServices->AllocatePool(EfiLoaderData, memmap_size, (void **) &memmap);
+	status = SystemTable->BootServices->AllocatePool(EfiLoaderData, memmap_size, (void **) &memmap_desc);
 	if (EFI_ERROR(status)) {
 		Print(L"Failed to allocate pool for memory map\r\n");
 		for (;;) {}
@@ -150,31 +150,90 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	SystemTable->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 4, &stack);
 	void *stack_top = (void *) (stack + 0x4000);
 
+	// boot info
+	static boot_info_t bootinfo;
+	bootinfo.hhdm = HHDM_OFFSET;
+
 	// framebuffer
 	EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
-	boot_framebuffer_t fb;
 	graphics_init(SystemTable, &gop);
-	create_framebuffer(SystemTable, &gop, &fb);
 
+	boot_framebuffers_t *fbs_ptr;
+	status = SystemTable->BootServices->AllocatePool(
+		EfiLoaderData,
+		sizeof(boot_framebuffers_t),
+		(void **) &fbs_ptr);
+
+	boot_framebuffer_t **fb_array;
+	status = SystemTable->BootServices->AllocatePool(
+		EfiLoaderData,
+		sizeof(boot_framebuffer_t *),
+		(void **) &fb_array);
+
+	boot_framebuffer_t *fb_ptr;
+	status = SystemTable->BootServices->AllocatePool(
+		EfiLoaderData,
+		sizeof(boot_framebuffer_t),
+		(void **) &fb_ptr);
+
+	create_framebuffer(SystemTable, &gop, fb_ptr);
+
+	fb_array[0] = fb_ptr;
+	fbs_ptr->count = 1;
+	fbs_ptr->entries = fb_array;
+
+	for (uint64_t addr = (uint64_t) fb_ptr->address & ~0xFFFULL; addr < (uint64_t) fb_ptr->address + fb_ptr->size; addr += 4096) {
+		map_table(SystemTable, addr, addr, PTE_READWRITE | PTE_CACHEDISABLE);
+	}
+
+	bootinfo.framebuffers = fbs_ptr;
+
+	// memmap
+	UINTN max_entries = memmap_size / desc_size;
+
+	boot_memmap_entry_t *entries;
+	status = SystemTable->BootServices->AllocatePool(
+		EfiLoaderData,
+		sizeof(boot_memmap_entry_t) * max_entries,
+		(void **) &entries);
+
+	boot_memmap_entry_t **entriesp;
+	status = SystemTable->BootServices->AllocatePool(
+		EfiLoaderData,
+		sizeof(boot_memmap_entry_t *) * max_entries,
+		(void **) &entriesp);
+
+	static boot_memmap_t memmap;
+	memmap.entries = entriesp;
 	while (TRUE) {
 		UINTN current_size = memmap_size;
-		status = SystemTable->BootServices->GetMemoryMap(&current_size, memmap, &memmap_key, &desc_size, &desc_ver);
+		status = SystemTable->BootServices->GetMemoryMap(&current_size, memmap_desc, &memmap_key, &desc_size, &desc_ver);
 		if (!EFI_ERROR(status)) {
 			status = SystemTable->BootServices->ExitBootServices(ImageHandle, memmap_key);
 			if (!EFI_ERROR(status)) {
+				UINTN final_num_entries = current_size / desc_size;
+				memmap.count = 0;
+
+				uint8_t *ptr = (uint8_t *) memmap_desc;
+				for (UINTN i = 0; i < final_num_entries; i++) {
+					EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *) ptr;
+
+					entries[i].base = desc->PhysicalStart;
+					entries[i].length = desc->NumberOfPages * 4096;
+					entries[i].type = desc->Type;
+
+					memmap.entries[memmap.count] = &entries[i];
+					memmap.count++;
+
+					ptr += desc_size;
+				}
+
+				bootinfo.memmap = &memmap;
 				break;
 			}
 		}
 	}
-
-	// boot info
-	boot_framebuffers_t fbs;
-	fbs.count = 1;
-	boot_framebuffer_t *fbp = &fb;
-	fbs.entries = &fbp;
-	boot_info_t bootinfo;
-	bootinfo.hhdm = HHDM_OFFSET;
-	bootinfo.framebuffers = &fbs;
+	bootinfo.memmap = &memmap;
 
 	jump(&gdt_ptr, stack_top, (void *) entry, &bootinfo);
 
