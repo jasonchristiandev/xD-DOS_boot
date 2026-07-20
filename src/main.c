@@ -151,7 +151,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	void *stack_top = (void *) (stack + 0x4000);
 
 	// boot info
-	static boot_info_t bootinfo;
+		boot_info_t bootinfo;
 	bootinfo.hhdm = HHDM_OFFSET;
 
 	// framebuffer
