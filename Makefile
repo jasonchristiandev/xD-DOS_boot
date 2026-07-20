@@ -1,13 +1,10 @@
 ROOT_DIR = $(abspath ..)
 include ../settings.mk
 
-HASH = $(shell git rev-parse --short HEAD)
-TAG = $(shell git describe --tags --exact-match 2>/dev/null)
-COMMIT_HASH = $(if $(TAG),$(TAG),$(HASH))
 CC = x86_64-w64-mingw32-gcc
 
 CFLAGS += -I/usr/include/efi -I/usr/include/efi/x86_64 -I$(BOOTLOADER_DIR)/protocol
-CFLAGS += -ffreestanding -fno-stack-protector -mno-red-zone -fshort-wchar -DCOMMIT_HASH=\"$(COMMIT_HASH)\"
+CFLAGS += -ffreestanding -fno-stack-protector -mno-red-zone -fshort-wchar
 
 SRCS = $(wildcard $(SRC_DIR)/*.c)
 ASMS = $(wildcard $(ASM_DIR)/*.s)
@@ -22,7 +19,7 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/%.c.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	@echo " [CC] $<"
-	@$(CC) $(CFLAGS) -c $< -o $@ -DDEBUG=$(VERBOSE)
+	@$(CC) $(CFLAGS) -c $< -o $@ -DVERBOSE=$(VERBOSE)
 
 $(BUILD_DIR)/%.s.o: $(ASM_DIR)/%.s | $(BUILD_DIR)
 	@echo " [ASM] $<"
