@@ -1,3 +1,4 @@
+#include "gdt.h"
 #include "paging.h"
 #include <efi.h>
 #include <elf.h>
@@ -10,6 +11,8 @@
 #endif
 
 #define Print(x) SystemTable->ConOut->OutputString(SystemTable->ConOut, (x))
+
+extern void jump(void *gdt_ptr, void *stack, void *entry);
 
 EFI_FILE_HANDLE GetVolume(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 	EFI_LOADED_IMAGE *loaded = NULL;
@@ -42,7 +45,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	Print(L"xD-DOS Bootloader (" WIDEN(COMMIT_HASH) L")\r\n"
 													L"> https://github.com/jasonchristiandev/xD-DOS_boot\r\n"
 													L"> Maintained by Jason Christian.\r\n\n"
-													L"> Press any key to continue...\r\n\n");
+													L" [Press any key to continue...]\r\n\n");
 
 	UINTN index;
 	EFI_EVENT events[1];
@@ -100,6 +103,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		for (;;) {}
 	}
 
+	paging_init(SystemTable);
+
 	Elf64_Phdr *phdr = (Elf64_Phdr *) ((UINT8 *) base + ehdr->e_phoff);
 	for (UINT16 i = 0; i < ehdr->e_phnum; i++) {
 		if (phdr[i].p_type == PT_LOAD) {
@@ -114,6 +119,15 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 			if (phdr[i].p_memsz > phdr[i].p_filesz) {
 				SystemTable->BootServices->SetMem((UINT8 *) dest + phdr[i].p_filesz, phdr[i].p_memsz - phdr[i].p_filesz, 0);
 			}
+
+			UINT64 start = virt & ~0xFFFULL;
+			UINT64 end = (virt + phdr[i].p_memsz + 0xFFFULL) & ~0xFFFULL;
+			UINT64 cur = phys & ~0xFFFULL;
+
+			for (UINT64 addr = start; addr < end; addr += 4096) {
+				map_table(SystemTable, addr, cur, PTE_READWRITE);
+				cur += 4096;
+			}
 		}
 	}
 
@@ -123,38 +137,30 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	UINT32 desc_ver = 0;
 	UINTN memmap_size = 0;
 
-	paging_init(SystemTable);
+	SystemTable->BootServices->GetMemoryMap(&memmap_size, NULL, &memmap_key, &desc_size, &desc_ver);
+	memmap_size += (2 * desc_size);
+	status = SystemTable->BootServices->AllocatePool(EfiLoaderData, memmap_size, (void **) &memmap);
+	if (EFI_ERROR(status)) {
+		Print(L"Failed to allocate pool for memory map\r\n");
+		for (;;) {}
+	}
+
+	EFI_PHYSICAL_ADDRESS stack;
+	SystemTable->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 4, &stack);
+	void *stack_top = (void *) (stack + 0x4000);
 
 	while (TRUE) {
-		status = SystemTable->BootServices->GetMemoryMap(&memmap_size, memmap, &memmap_key, &desc_size, &desc_ver);
-
-		if (status == EFI_BUFFER_TOO_SMALL) {
-			if (memmap != NULL) {
-				SystemTable->BootServices->FreePool(memmap);
-				memmap = NULL;
-			}
-
-			memmap_size += (2 * desc_size);
-			status = SystemTable->BootServices->AllocatePool(EfiLoaderData, memmap_size, (void **) &memmap);
-			if (EFI_ERROR(status)) {
-				Print(L"Failed to allocate pool for memory map\r\n");
-				for (;;) {}
-			}
-			continue;
-		} else if (EFI_ERROR(status)) {
-			Print(L"Failed to get memory map\r\n");
-			for (;;) {}
-		}
-
-		status = SystemTable->BootServices->ExitBootServices(ImageHandle, memmap_key);
+		UINTN current_size = memmap_size;
+		status = SystemTable->BootServices->GetMemoryMap(&current_size, memmap, &memmap_key, &desc_size, &desc_ver);
 		if (!EFI_ERROR(status)) {
-			break;
+			status = SystemTable->BootServices->ExitBootServices(ImageHandle, memmap_key);
+			if (!EFI_ERROR(status)) {
+				break;
+			}
 		}
 	}
 
-	typedef void (*KernelEntry)(void);
-	KernelEntry jump = (KernelEntry) (entry - 0xFFFFFFFF80000000);
-	jump();
+	jump(&gdt_ptr, stack_top, (void *) entry);
 
 	return EFI_SUCCESS;
 }
