@@ -1,5 +1,6 @@
-#include "gdt.h"
-#include "paging.h"
+#include "xddos_boot/gdt.h"
+#include "xddos_boot/graphics.h"
+#include "xddos_boot/paging.h"
 #include <efi.h>
 #include <elf.h>
 
@@ -12,9 +13,9 @@
 
 #define Print(x) SystemTable->ConOut->OutputString(SystemTable->ConOut, (x))
 
-extern void jump(void *gdt_ptr, void *stack, void *entry);
+extern void jump(void *gdt_ptr, void *stack, void *entry, boot_info_t *info);
 
-EFI_FILE_HANDLE GetVolume(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+EFI_FILE_HANDLE get_volume(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 	EFI_LOADED_IMAGE *loaded = NULL;
 	EFI_GUID lip_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 	EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *io_volume;
@@ -53,7 +54,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	SystemTable->BootServices->WaitForEvent(1, events, &index);
 	SystemTable->ConOut->ClearScreen(SystemTable->ConOut);
 
-	EFI_FILE_HANDLE volume = GetVolume(ImageHandle, SystemTable);
+	EFI_FILE_HANDLE volume = get_volume(ImageHandle, SystemTable);
 	EFI_FILE_HANDLE file;
 	status = volume->Open(volume, &file, L"\\boot\\kernel.elf", EFI_FILE_MODE_READ, EFI_FILE_READ_ONLY | EFI_FILE_HIDDEN | EFI_FILE_SYSTEM);
 	if (EFI_ERROR(status)) {
@@ -149,6 +150,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	SystemTable->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 4, &stack);
 	void *stack_top = (void *) (stack + 0x4000);
 
+	// framebuffer
+	EFI_GRAPHICS_OUTPUT_PROTOCOL gop;
+	boot_framebuffer_t fb;
+	graphics_init(SystemTable, &gop);
+	create_framebuffer(SystemTable, &gop, &fb);
+
 	while (TRUE) {
 		UINTN current_size = memmap_size;
 		status = SystemTable->BootServices->GetMemoryMap(&current_size, memmap, &memmap_key, &desc_size, &desc_ver);
@@ -160,7 +167,16 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		}
 	}
 
-	jump(&gdt_ptr, stack_top, (void *) entry);
+	// boot info
+	boot_framebuffers_t fbs;
+	fbs.count = 1;
+	boot_framebuffer_t *fbp = &fb;
+	fbs.entries = &fbp;
+	boot_info_t bootinfo;
+	bootinfo.hhdm = HHDM_OFFSET;
+	bootinfo.framebuffers = &fbs;
+
+	jump(&gdt_ptr, stack_top, (void *) entry, &bootinfo);
 
 	return EFI_SUCCESS;
 }

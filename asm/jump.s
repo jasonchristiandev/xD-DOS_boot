@@ -24,4 +24,7 @@ jump:
 	push 0x08
 	push r8
 
+	; arguments
+	mov rcx, r9
+
 	retfq

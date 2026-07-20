@@ -1,10 +1,8 @@
-#include "paging.h"
+#include "xddos_boot/paging.h"
 #include <efi.h>
 #include <stdint.h>
 
 #define Print(x) SystemTable->ConOut->OutputString(SystemTable->ConOut, (x))
-
-const uint64_t hhdm_offset = 0xFFFF800000000000ULL;
 
 typedef struct {
 	uint64_t entries[512];
@@ -110,7 +108,7 @@ void paging_init(EFI_SYSTEM_TABLE *SystemTable) {
 
 	// hhdm
 	for (uint64_t i = 0; i < 0x100000000ULL; i += 0x200000) {
-		map_table_huge(SystemTable, hhdm_offset + i, i, PTE_READWRITE);
+		map_table_huge(SystemTable, HHDM_OFFSET + i, i, PTE_READWRITE);
 	}
 
 	// stack

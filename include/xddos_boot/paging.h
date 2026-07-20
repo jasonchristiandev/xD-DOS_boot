@@ -6,6 +6,8 @@
 
 #define PAGE_SIZE 4096
 
+#define HHDM_OFFSET 0xFFFF800000000000ULL
+
 typedef enum : uint16_t {
 	PTE_PRESENT = 1 << 0,
 	PTE_READWRITE = 1 << 1,
