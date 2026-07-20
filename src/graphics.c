@@ -22,26 +22,28 @@ void color_bitmask(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info, boot_video_mode_t
 	}
 }
 
-EFI_STATUS graphics_init(EFI_SYSTEM_TABLE *SystemTable, EFI_GRAPHICS_OUTPUT_PROTOCOL *gop) {
+EFI_STATUS graphics_init(EFI_SYSTEM_TABLE *SystemTable, EFI_GRAPHICS_OUTPUT_PROTOCOL **gop) {
 	EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 
-	EFI_STATUS status = SystemTable->BootServices->LocateProtocol(&gop_guid, NULL, (void **) &gop);
+	EFI_STATUS status = SystemTable->BootServices->LocateProtocol(&gop_guid, NULL, (void **) gop);
 	if (EFI_ERROR(status)) return status;
 
 	EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = NULL;
 	UINTN info_size = 0;
 
-	status = gop->QueryMode(gop, gop->Mode->Mode, &info_size, &info);
+	status = (*gop)->QueryMode(*gop, (*gop)->Mode->Mode, &info_size, &info);
 	if (status == EFI_BUFFER_TOO_SMALL) {
-		status = gop->QueryMode(gop, gop->Mode->Mode, &info_size, &info);
+		status = (*gop)->QueryMode(*gop, (*gop)->Mode->Mode, &info_size, &info);
 	}
+
+	SystemTable->BootServices->FreePool(info);
 
 	return EFI_SUCCESS;
 }
 
-EFI_STATUS create_framebuffer(EFI_SYSTEM_TABLE *SystemTable, EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, boot_framebuffer_t *fb) {
+EFI_STATUS create_framebuffer(EFI_SYSTEM_TABLE *SystemTable, EFI_GRAPHICS_OUTPUT_PROTOCOL **gop, boot_framebuffer_t *fb) {
 	EFI_STATUS status;
-	UINT32 max_modes = gop->Mode->MaxMode;
+	UINT32 max_modes = (*gop)->Mode->MaxMode;
 
 	status = SystemTable->BootServices->AllocatePool(
 		EfiLoaderData,
@@ -55,7 +57,7 @@ EFI_STATUS create_framebuffer(EFI_SYSTEM_TABLE *SystemTable, EFI_GRAPHICS_OUTPUT
 		EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = NULL;
 		UINTN size = 0;
 
-		status = gop->QueryMode(gop, mode_id, &size, &info);
+		status = (*gop)->QueryMode(*gop, mode_id, &size, &info);
 		if (EFI_ERROR(status)) continue;
 
 		if (info->PixelFormat == PixelBltOnly) {
@@ -82,12 +84,12 @@ EFI_STATUS create_framebuffer(EFI_SYSTEM_TABLE *SystemTable, EFI_GRAPHICS_OUTPUT
 		SystemTable->BootServices->FreePool(info);
 	}
 
-	fb->address = gop->Mode->FrameBufferBase;
-	fb->size = gop->Mode->FrameBufferSize;
-	fb->width = gop->Mode->Info->HorizontalResolution;
-	fb->height = gop->Mode->Info->VerticalResolution;
+	fb->address = (void *) (*gop)->Mode->FrameBufferBase;
+	fb->size = (*gop)->Mode->FrameBufferSize;
+	fb->width = (*gop)->Mode->Info->HorizontalResolution;
+	fb->height = (*gop)->Mode->Info->VerticalResolution;
 	fb->bpp = 32;
-	fb->pitch = gop->Mode->Info->PixelsPerScanLine * (fb->bpp / 8);
+	fb->pitch = (*gop)->Mode->Info->PixelsPerScanLine * (fb->bpp / 8);
 
 	return EFI_SUCCESS;
 }

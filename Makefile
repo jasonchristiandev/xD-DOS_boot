@@ -6,7 +6,7 @@ TAG = $(shell git describe --tags --exact-match 2>/dev/null)
 COMMIT_HASH = $(if $(TAG),$(TAG),$(HASH))
 CC = x86_64-w64-mingw32-gcc
 
-CFLAGS += -I/usr/include/efi -I/usr/include/efi/x86_64
+CFLAGS += -I/usr/include/efi -I/usr/include/efi/x86_64 -I$(BOOTLOADER_DIR)/protocol
 CFLAGS += -ffreestanding -fno-stack-protector -mno-red-zone -fshort-wchar -DCOMMIT_HASH=\"$(COMMIT_HASH)\"
 
 SRCS = $(wildcard $(SRC_DIR)/*.c)

@@ -151,7 +151,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	void *stack_top = (void *) (stack + 0x4000);
 
 	// framebuffer
-	EFI_GRAPHICS_OUTPUT_PROTOCOL gop;
+	EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
 	boot_framebuffer_t fb;
 	graphics_init(SystemTable, &gop);
 	create_framebuffer(SystemTable, &gop, &fb);

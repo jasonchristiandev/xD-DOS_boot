@@ -19,7 +19,7 @@ typedef struct {
 } boot_video_modes_t;
 
 typedef struct {
-	uint64_t address;
+	void *address;
 	uint64_t size;
 	uint64_t width;
 	uint64_t height;
