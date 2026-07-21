@@ -1,6 +1,7 @@
 #include "xddos_boot/gdt.h"
 #include "xddos_boot/graphics.h"
 #include "xddos_boot/paging.h"
+#include "xddos_boot/protocol.h"
 #include <efi.h>
 #include <elf.h>
 
@@ -51,7 +52,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 	UINTN index;
 	EFI_EVENT events[1];
 	events[0] = SystemTable->ConIn->WaitForKey;
-	// SystemTable->BootServices->WaitForEvent(1, events, &index);
+	SystemTable->BootServices->WaitForEvent(1, events, &index);
 	SystemTable->ConOut->ClearScreen(SystemTable->ConOut);
 
 	EFI_FILE_HANDLE volume = get_volume(ImageHandle, SystemTable);
@@ -88,15 +89,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		for (;;) {}
 	}
 
-	UINTN read_size = info->FileSize;
-	status = file->Read(file, &read_size, base);
+	UINTN file_size = info->FileSize;
+	file->SetPosition(file, 0);
+	status = file->Read(file, &file_size, base);
 	if (EFI_ERROR(status)) {
-		Print(L"Failed to get kernel file size\r\n");
+		Print(L"Failed to read kernel file\r\n");
 		for (;;) {}
 	}
-
-	Elf64_Ehdr *ehdr = (Elf64_Ehdr *) base;
-	UINT64 entry = ehdr->e_entry;
 
 	status = SystemTable->BootServices->FreePool(info);
 	if (EFI_ERROR(status)) {
@@ -104,13 +103,33 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		for (;;) {}
 	}
 
+	// boot info
+	EFI_PHYSICAL_ADDRESS bootinfo_addr = 0xffffffff;
+	SystemTable->BootServices->AllocatePages(AllocateMaxAddress, EfiLoaderData, 1, &bootinfo_addr);
+	boot_info_t *bootinfo = (boot_info_t *) (bootinfo_addr & ~0xFFF);
+	bootinfo->hhdm = HHDM_OFFSET;
+
+	boot_executable_file_t exefile;
+	exefile.address = base;
+	exefile.size = file_size;
+	bootinfo->exefile = &exefile;
+
+	Elf64_Ehdr *ehdr = (Elf64_Ehdr *) base;
+	UINT64 entry = ehdr->e_entry;
+
 	paging_init(SystemTable);
 
 	Elf64_Phdr *phdr = (Elf64_Phdr *) ((UINT8 *) base + ehdr->e_phoff);
+	uint64_t ephys = 0xFFFFFFFFFFFFFFFF;
+	uint64_t evirt = 0xFFFFFFFFFFFFFFFF;
+
 	for (UINT16 i = 0; i < ehdr->e_phnum; i++) {
 		if (phdr[i].p_type == PT_LOAD) {
 			UINT64 virt = phdr[i].p_vaddr;
 			UINT64 phys = virt >= 0xFFFFFFFF80000000 ? virt - 0xFFFFFFFF80000000 : virt;
+
+			if (phys < ephys) ephys = phys;
+			if (virt < evirt) evirt = virt;
 
 			VOID *dest = (VOID *) phys;
 			VOID *src = (VOID *) ((UINT8 *) base + phdr[i].p_offset);
@@ -132,6 +151,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		}
 	}
 
+	boot_executable_address_t exeaddr;
+	exeaddr.phys = ephys;
+	exeaddr.virt = evirt;
+	bootinfo->exeaddr = &exeaddr;
+
 	EFI_MEMORY_DESCRIPTOR *memmap_desc = NULL;
 	UINTN memmap_key = 0;
 	UINTN desc_size = 0;
@@ -146,35 +170,40 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		for (;;) {}
 	}
 
-	EFI_PHYSICAL_ADDRESS stack;
-	SystemTable->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 4, &stack);
+	EFI_PHYSICAL_ADDRESS stack = 0xffffffff;
+	SystemTable->BootServices->AllocatePages(AllocateMaxAddress, EfiLoaderData, 4, &stack);
 	void *stack_top = (void *) (stack + 0x4000);
-
-	// boot info
-		boot_info_t bootinfo;
-	bootinfo.hhdm = HHDM_OFFSET;
 
 	// framebuffer
 	EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
 	graphics_init(SystemTable, &gop);
 
+	EFI_PHYSICAL_ADDRESS fbs_addr = 0xffffffff;
 	boot_framebuffers_t *fbs_ptr;
-	status = SystemTable->BootServices->AllocatePool(
+	status = SystemTable->BootServices->AllocatePages(
+		AllocateMaxAddress,
 		EfiLoaderData,
-		sizeof(boot_framebuffers_t),
-		(void **) &fbs_ptr);
+		(sizeof(boot_framebuffers_t) + PAGE_SIZE - 1) / PAGE_SIZE,
+		&fbs_addr);
+	fbs_ptr = (boot_framebuffers_t *) fbs_addr;
 
+	EFI_PHYSICAL_ADDRESS fb_array_addr = 0xffffffff;
 	boot_framebuffer_t **fb_array;
-	status = SystemTable->BootServices->AllocatePool(
+	status = SystemTable->BootServices->AllocatePages(
+		AllocateMaxAddress,
 		EfiLoaderData,
-		sizeof(boot_framebuffer_t *),
-		(void **) &fb_array);
+		(sizeof(boot_framebuffer_t *) + PAGE_SIZE - 1) / PAGE_SIZE,
+		&fb_array_addr);
+	fb_array = (boot_framebuffer_t **) fb_array_addr;
 
+	EFI_PHYSICAL_ADDRESS fb_addr = 0xffffffff;
 	boot_framebuffer_t *fb_ptr;
-	status = SystemTable->BootServices->AllocatePool(
+	status = SystemTable->BootServices->AllocatePages(
+		AllocateMaxAddress,
 		EfiLoaderData,
-		sizeof(boot_framebuffer_t),
-		(void **) &fb_ptr);
+		(sizeof(boot_framebuffer_t) + PAGE_SIZE - 1) / PAGE_SIZE,
+		&fb_addr);
+	fb_ptr = (boot_framebuffer_t *) fb_addr;
 
 	create_framebuffer(SystemTable, &gop, fb_ptr);
 
@@ -186,24 +215,30 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 		map_table(SystemTable, addr, addr, PTE_READWRITE | PTE_CACHEDISABLE);
 	}
 
-	bootinfo.framebuffers = fbs_ptr;
+	bootinfo->framebuffers = fbs_ptr;
 
 	// memmap
 	UINTN max_entries = memmap_size / desc_size;
 
+	EFI_PHYSICAL_ADDRESS entries_addr = 0xffffffff;
 	boot_memmap_entry_t *entries;
-	status = SystemTable->BootServices->AllocatePool(
+	status = SystemTable->BootServices->AllocatePages(
+		AllocateMaxAddress,
 		EfiLoaderData,
-		sizeof(boot_memmap_entry_t) * max_entries,
-		(void **) &entries);
+		(sizeof(boot_memmap_entry_t) * max_entries + PAGE_SIZE - 1) / PAGE_SIZE,
+		&entries_addr);
+	entries = (boot_memmap_entry_t *) entries_addr;
 
+	EFI_PHYSICAL_ADDRESS entriesp_addr = 0xffffffff;
 	boot_memmap_entry_t **entriesp;
-	status = SystemTable->BootServices->AllocatePool(
+	status = SystemTable->BootServices->AllocatePages(
+		AllocateMaxAddress,
 		EfiLoaderData,
-		sizeof(boot_memmap_entry_t *) * max_entries,
-		(void **) &entriesp);
+		(sizeof(boot_memmap_entry_t *) * max_entries + PAGE_SIZE - 1) / PAGE_SIZE,
+		&entriesp_addr);
+	entriesp = (boot_memmap_entry_t **) entriesp_addr;
 
-	static boot_memmap_t memmap;
+	boot_memmap_t memmap;
 	memmap.entries = entriesp;
 	while (TRUE) {
 		UINTN current_size = memmap_size;
@@ -220,7 +255,31 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 
 					entries[i].base = desc->PhysicalStart;
 					entries[i].length = desc->NumberOfPages * 4096;
-					entries[i].type = desc->Type;
+					if (desc->Type == EfiConventionalMemory ||
+						desc->Type == EfiBootServicesCode ||
+						desc->Type == EfiBootServicesData) {
+						entries[i].type = BOOT_MEMMAP_USABLE;
+					}
+					if (desc->Type == EfiReservedMemoryType ||
+						desc->Type == EfiUnusableMemory ||
+						desc->Type == EfiLoaderCode ||
+						desc->Type == EfiLoaderData ||
+						desc->Type == EfiMemoryMappedIO ||
+						desc->Type == EfiMemoryMappedIOPortSpace ||
+						desc->Type == EfiPalCode ||
+						desc->Type == EfiRuntimeServicesCode ||
+						desc->Type == EfiRuntimeServicesData) {
+						entries[i].type = BOOT_MEMMAP_RESERVED;
+					}
+					if (desc->Type == EfiACPIReclaimMemory) {
+						entries[i].type = BOOT_MEMMAP_ACPI_RECLAIMABLE;
+					}
+					if (desc->Type == EfiACPIMemoryNVS) {
+						entries[i].type = BOOT_MEMMAP_ACPI_NVS;
+					}
+					if (desc->Type == EfiPersistentMemory) {
+						entries[i].type = BOOT_MEMMAP_RESERVED_MAPPED;
+					}
 
 					memmap.entries[memmap.count] = &entries[i];
 					memmap.count++;
@@ -228,14 +287,14 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
 					ptr += desc_size;
 				}
 
-				bootinfo.memmap = &memmap;
+				bootinfo->memmap = &memmap;
 				break;
 			}
 		}
 	}
-	bootinfo.memmap = &memmap;
+	bootinfo->memmap = &memmap;
 
-	jump(&gdt_ptr, stack_top, (void *) entry, &bootinfo);
+	jump(&gdt_ptr, stack_top, (void *) entry, bootinfo);
 
 	return EFI_SUCCESS;
 }

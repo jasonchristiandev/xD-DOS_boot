@@ -11,8 +11,8 @@ typedef struct {
 page_table_t *pml4;
 
 EFI_PHYSICAL_ADDRESS alloc_page(EFI_SYSTEM_TABLE *SystemTable) {
-	EFI_PHYSICAL_ADDRESS phys;
-	SystemTable->BootServices->AllocatePages(AllocateAnyPages, EfiLoaderData, 1, &phys);
+	EFI_PHYSICAL_ADDRESS phys = 0xffffffff;
+	SystemTable->BootServices->AllocatePages(AllocateMaxAddress, EfiLoaderData, 1, &phys);
 	return phys;
 }
 
